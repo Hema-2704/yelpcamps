@@ -2,10 +2,10 @@ pipeline {
     agent any
     
     environment {
-        DOCKER_REGISTRY = 'your-dockerhub-username'
+        DOCKER_REGISTRY = '40448283'
         IMAGE_NAME = 'yelpcamp'
         DOCKER_CREDENTIALS_ID = 'docker-hub-credentials'
-        GIT_CREDENTIALS_ID = 'github-credentials'
+        GIT_CREDENTIALS_ID = 'gits'
     }
     
     stages {
