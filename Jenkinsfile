@@ -1,101 +1,109 @@
 pipeline {
     agent any
     
-    tools {
-        nodejs "NodeJS"
-    }
-    
     environment {
-        NODE_ENV = 'production'
-        PORT = '3300'
-    }
-    
-    options {
-        timestamps()
-        buildDiscarder(logRotator(numToKeepStr: '10'))
-        timeout(time: 30, unit: 'MINUTES')
+        DOCKER_REGISTRY = 'your-dockerhub-username'
+        IMAGE_NAME = 'yelpcamp'
+        DOCKER_CREDENTIALS_ID = 'docker-hub-credentials'
+        GIT_CREDENTIALS_ID = 'github-credentials'
     }
     
     stages {
         stage('Checkout') {
             steps {
-                checkout scm
+                git branch: 'main',
+                    credentialsId: env.GIT_CREDENTIALS_ID,
+                    url: 'https://github.com/your-username/yelpcamp.git'
             }
         }
         
-        stage('Install Dependencies') {
+        stage('Build Docker Image') {
             steps {
-                bat 'npm ci --legacy-peer-deps'
+                script {
+                    docker.build("${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.BUILD_NUMBER}")
+                }
             }
         }
         
         stage('Run Tests') {
             steps {
-                bat 'npm test'
+                script {
+                    docker.image("${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.BUILD_NUMBER}").inside {
+                        sh 'npm test'  // or your test command
+                    }
+                }
             }
         }
         
-        stage('Security Audit') {
-            steps {
-                bat 'npm audit --audit-level moderate'
-            }
-        }
-        
-        stage('Stop Previous App') {
-            steps {
-                bat '''
-                    echo Stopping any existing YelpCamp process...
-                    taskkill /f /im node.exe 2>nul || exit 0
-                    timeout /t 5 /nobreak
-                '''
-            }
-        }
-        
-        stage('Start Application') {
-            steps {
-                bat """
-                    echo Starting YelpCamp application...
-                    start /b node app.js > yelpcamp.log 2>&1
-                    echo Application started in background
-                """
-            }
-        }
-        
-        stage('Health Check') {
+        stage('Security Scan') {
             steps {
                 script {
-                    sleep time: 15, unit: 'SECONDS'
-                    bat """
-                        echo Performing health check...
-                        curl -f http://localhost:%PORT%/ || curl -f http://localhost:%PORT%/campgrounds
-                        if %errorlevel% equ 0 (
-                            echo ✅ YelpCamp is healthy and responding on port %PORT%
-                        ) else (
-                            echo ❌ Health check failed
-                            type yelpcamp.log
-                            exit 1
-                        )
+                    sh "docker scan ${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.BUILD_NUMBER}"
+                }
+            }
+        }
+        
+        stage('Push to Docker Hub') {
+            steps {
+                script {
+                    docker.withRegistry('https://registry.hub.docker.com', env.DOCKER_CREDENTIALS_ID) {
+                        docker.image("${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.BUILD_NUMBER}").push()
+                        docker.image("${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.BUILD_NUMBER}").push('latest')
+                    }
+                }
+            }
+        }
+        
+        stage('Deploy to Staging') {
+            steps {
+                script {
+                    sh """
+                    docker stop yelpcamp-staging || true
+                    docker rm yelpcamp-staging || true
+                    docker run -d \
+                        --name yelpcamp-staging \
+                        -p 3000:3000 \
+                        -e NODE_ENV=staging \
+                        ${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.BUILD_NUMBER}
                     """
+                }
+            }
+        }
+        
+        stage('Integration Tests') {
+            steps {
+                script {
+                    // Wait for app to start
+                    sleep 30
+                    // Run integration tests
+                    sh 'curl -f http://localhost:3000/health || exit 1'
                 }
             }
         }
     }
     
     post {
+        always {
+            // Clean up staging container
+            sh 'docker stop yelpcamp-staging || true'
+            sh 'docker rm yelpcamp-staging || true'
+            
+            // Clean up Docker images to save space
+            sh 'docker system prune -f'
+        }
         success {
-            echo "✅ YelpCamp deployed successfully! Running on port ${PORT}"
+            emailext (
+                subject: "SUCCESS: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+                body: "The build ${env.BUILD_URL} completed successfully.",
+                to: "developer@yourcompany.com"
+            )
         }
         failure {
-            echo "❌ Deployment failed"
-            bat '''
-                echo === Application Logs ===
-                type yelpcamp.log
-                echo === Current Processes ===
-                tasklist | findstr node
-            '''
-        }
-        always {
-            archiveArtifacts artifacts: 'yelpcamp.log', onlyIfSuccessful: false
+            emailext (
+                subject: "FAILED: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+                body: "The build ${env.BUILD_URL} failed. Please check the console output.",
+                to: "developer@yourcompany.com"
+            )
         }
     }
 }
