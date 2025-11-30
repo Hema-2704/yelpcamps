@@ -1,12 +1,9 @@
-version: "3.8"
 services:
   yelpcamp:
     image: 40448283/yelpcamp:latest
     ports:
       - "3300:3300"
-    environment:
-      - NODE_ENV=production
-      - MONGO_URL=${MONGO_URL}
+    env_file: .env            # ← easier: loads keys from your .env
     depends_on:
       - mongo
   mongo:

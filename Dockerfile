@@ -1,26 +1,25 @@
-# Dockerfile tailored for YelpCamp
-FROM node:18-alpine AS builder
+# Dockerfile — use Debian-slim for reliable TLS support
+FROM node:18-slim AS builder
 WORKDIR /app
 
-# Copy package files and install dependencies (use legacy-peer-deps to avoid peer conflicts)
-COPY package*.json ./
-RUN npm ci --legacy-peer-deps
+# Install build deps if any (optional) — keep image small
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
-# Copy source
+COPY package*.json ./
+RUN npm ci --legac
 COPY . .
 
-# If you have a frontend build step, uncomment:
-# RUN npm run build
-
-# Runtime image
-FROM node:18-alpine
+FROM node:18-slim
 WORKDIR /app
 
-# Copy from builder stage
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /app /app
 
 ENV NODE_ENV=production
 EXPOSE 3300
-
-# Use npm start so package.json controls the entrypoint
 CMD ["npm", "start"]
