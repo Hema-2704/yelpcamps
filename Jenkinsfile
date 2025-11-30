@@ -1,97 +1,102 @@
 pipeline {
-  agent any
-
-  environment {
-    REGISTRY = "docker.io/40448283"
-    IMAGE = "${REGISTRY}/yelpcamp"
-    TAG = "${env.BUILD_NUMBER}"
-  }
-
-  options {
-    timestamps()
-    buildDiscarder(logRotator(numToKeepStr: '10'))
-  }
-
-  stages {
-
-    stage('Checkout') {
-      steps {
-        checkout scm
-      }
+    agent any
+    
+    tools {
+        nodejs "nodejs"
     }
-
-    stage('Install & Test') {
-      steps {
-        sh '''
-          docker run --rm \
-            -v "$PWD":/app \
-            -w /app \
-            node:18-alpine \
-            sh -c "npm ci --legacy-peer-deps && npm test || true"
-        '''
-      }
+    
+    environment {
+        NODE_ENV = 'production'
+        PORT = '3300'
     }
-
-    stage('Build Docker Image') {
-      steps {
-        sh "docker build -t ${IMAGE}:${TAG} ."
-      }
+    
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 30, unit: 'MINUTES')
     }
-
-    stage('Login to Registry') {
-      steps {
-        withCredentials([usernamePassword(
-          credentialsId: 'docker-registry-credentials',
-          usernameVariable: 'DOCKER_USER',
-          passwordVariable: 'DOCKER_PASS')]) {
-
-          sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
         }
-      }
-    }
-
-    stage('Push Image') {
-      steps {
-        sh "docker push ${IMAGE}:${TAG}"
-      }
-    }
-
-    stage('Deploy Container') {
-      steps {
-        withCredentials([file(credentialsId: 'envfile', variable: 'ENVFILE')]) {
-          sh """
-            echo 'Loading environment variables...'
-            set -a
-            source $ENVFILE
-            set +a
-
-            echo 'Stopping old container...'
-            docker rm -f yelpcamp || true
-
-            echo 'Starting container...'
-            docker run -d --name yelpcamp -p 3300:3300 \
-              -e MAPBOX_TOKEN="\$MAPBOX_TOKEN" \
-              -e DB_URL="\$DB_URL" \
-              -e CLOUDINARY_CLOUD_NAME="\$CLOUDINARY_CLOUD_NAME" \
-              -e CLOUDINARY_KEY="\$CLOUDINARY_KEY" \
-              -e CLOUDINARY_SECRET="\$CLOUDINARY_SECRET" \
-              -e SESSION_SECRET="\$SESSION_SECRET" \
-              ${IMAGE}:${TAG}
-          """
+        
+        stage('Install Dependencies') {
+            steps {
+                sh 'npm ci --legacy-peer-deps'
+            }
         }
-      }
+        
+        stage('Run Tests') {
+            steps {
+                sh 'npm test'
+            }
+        }
+        
+        stage('Security Audit') {
+            steps {
+                sh 'npm audit --audit-level moderate'
+            }
+        }
+        
+        stage('Stop Previous App') {
+            steps {
+                sh '''
+                    echo "Stopping any existing YelpCamp process..."
+                    pkill -f "node.*app.js" || true
+                    sleep 5
+                '''
+            }
+        }
+        
+        stage('Start Application') {
+            steps {
+                sh """
+                    echo "Starting YelpCamp application..."
+                    nohup node app.js > yelpcamp.log 2>&1 &
+                    echo \$! > yelpcamp.pid
+                    echo "Application started with PID: \$(cat yelpcamp.pid)"
+                """
+            }
+        }
+        
+        stage('Health Check') {
+            steps {
+                script {
+                    sleep time: 15, unit: 'SECONDS'
+                    sh """
+                        echo "Performing health check..."
+                        if curl -f http://localhost:\${PORT}/ || curl -f http://localhost:\${PORT}/campgrounds; then
+                            echo "✅ YelpCamp is healthy and responding on port \${PORT}"
+                        else
+                            echo "❌ Health check failed"
+                            echo "=== Application Logs ==="
+                            cat yelpcamp.log || true
+                            exit 1
+                        fi
+                    """
+                }
+            }
+        }
     }
-  }
-
-  post {
-    success {
-      echo "Build & Deploy SUCCEEDED"
+    
+    post {
+        success {
+            echo "✅ YelpCamp deployed successfully! Running on port \${PORT}"
+        }
+        failure {
+            echo "❌ Deployment failed"
+            sh '''
+                echo "=== Application Logs ==="
+                cat yelpcamp.log || true
+                echo "=== Current Processes ==="
+                ps aux | grep node || true
+            '''
+        }
+        always {
+            archiveArtifacts artifacts: 'yelpcamp.log', onlyIfSuccessful: false
+        }
     }
-    failure {
-      echo "Build FAILED"
-    }
-    always {
-      sh "docker image prune -af || true"
-    }
-  }
 }
