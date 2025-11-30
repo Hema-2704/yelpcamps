@@ -1,53 +1,70 @@
+// Jenkinsfile (Docker agent) using your env variables and credential IDs
 pipeline {
-    agent any
-    
-    environment {
-        CI = 'true'
+  agent {
+    docker {
+      image 'node:16'
+      args  '-u root:root'
     }
-    
-    stages {
-        stage('Setup Node.js') {
-            steps {
-                sh '''
-                    # Install Node.js if not present
-                    if ! command -v node &> /dev/null; then
-                        curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-                        sudo apt-get install -y nodejs
-                    fi
-                    echo "Node: $(node --version)"
-                    echo "NPM: $(npm --version)"
-                '''
-            }
-        }
-        
-        stage('Checkout Code') {
-            steps {
-                git 'https://github.com/Hema-2704/yelpcamps.git'
-            }
-        }
-        
-        stage('Install & Test') {
-            steps {
-                sh 'npm install'
-                sh 'npm audit --production || true'
-            }
-        }
-        
-        stage('Start App') {
-            steps {
-                sh '''
-                    npm start &
-                    sleep 20
-                    pkill -f "node.*app.js" || true
-                '''
-            }
-        }
-        
-        stage('Package') {
-            steps {
-                sh 'tar -czf yelpcamps-${BUILD_NUMBER}.tar.gz . --exclude=node_modules'
-                archiveArtifacts 'yelpcamps-*.tar.gz'
-            }
-        }
+  }
+
+  environment {
+    DOCKER_REGISTRY = '40448283'           // Your Docker Hub username (you provided)
+    IMAGE_NAME = 'yelpcamp'                // image repo name
+    TAG = "${env.BUILD_ID}"
+    DOCKER_CREDENTIALS_ID = 'docker-hub-credentials' // Jenkins credential id for Docker Hub
+    GIT_CREDENTIALS_ID = 'gits'            // Jenkins credential id for Git (if repo is private)
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        // If your repo is private, configure credentials in the job (see steps below)
+        checkout scm
+      }
     }
+
+    stage('Install') {
+      steps {
+        sh 'npm ci'
+      }
+    }
+
+    stage('Test') {
+      steps {
+        sh 'if npm run | grep -q test; then npm test || true; fi'
+      }
+    }
+
+    stage('Build Docker image') {
+      when { expression { fileExists('Dockerfile') } }
+      steps {
+        script {
+          def fullImage = "${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.TAG}"
+          sh "docker build -t ${fullImage} ."
+        }
+      }
+    }
+
+    stage('Push Docker image') {
+      when { expression { fileExists('Dockerfile') } }
+      steps {
+        withCredentials([usernamePassword(credentialsId: env.DOCKER_CREDENTIALS_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+          script {
+            def fullImage = "${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.TAG}"
+            sh '''
+              echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+              docker push ${fullImage}
+            '''
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "Done — image: ${DOCKER_REGISTRY}/${IMAGE_NAME}:${TAG}"
+    }
+    failure { echo "Build failed" }
+  }
 }
