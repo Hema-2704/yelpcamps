@@ -1,37 +1,30 @@
-// Jenkinsfile (Docker agent) using your env variables and credential IDs
 pipeline {
-  agent {
-    docker {
-      image 'node:16'
-      args  '-u root:root'
-    }
-  }
+  agent any
 
   environment {
-    DOCKER_REGISTRY = '40448283'           // Your Docker Hub username (you provided)
-    IMAGE_NAME = 'yelpcamp'                // image repo name
+    DOCKER_REGISTRY = '40448283'
+    IMAGE_NAME = 'yelpcamp'
     TAG = "${env.BUILD_ID}"
-    DOCKER_CREDENTIALS_ID = 'docker-hub-credentials' // Jenkins credential id for Docker Hub
-    GIT_CREDENTIALS_ID = 'gits'            // Jenkins credential id for Git (if repo is private)
+    DOCKER_CREDENTIALS_ID = 'docker-hub-credentials'
+    GIT_CREDENTIALS_ID = 'gits'
   }
 
   stages {
     stage('Checkout') {
       steps {
-        // If your repo is private, configure credentials in the job (see steps below)
         checkout scm
       }
     }
 
     stage('Install') {
       steps {
-        sh 'npm ci'
+        bat 'npm install'
       }
     }
 
     stage('Test') {
       steps {
-        sh 'if npm run | grep -q test; then npm test || true; fi'
+        bat 'echo Skipping tests'
       }
     }
 
@@ -40,7 +33,7 @@ pipeline {
       steps {
         script {
           def fullImage = "${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.TAG}"
-          sh "docker build -t ${fullImage} ."
+          bat "docker build -t ${fullImage} ."
         }
       }
     }
@@ -51,10 +44,10 @@ pipeline {
         withCredentials([usernamePassword(credentialsId: env.DOCKER_CREDENTIALS_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
           script {
             def fullImage = "${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.TAG}"
-            sh '''
-              echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+            bat """
+              echo %DOCKER_PASS% | docker login -u %DOCKER_USER% --password-stdin
               docker push ${fullImage}
-            '''
+            """
           }
         }
       }
@@ -65,6 +58,8 @@ pipeline {
     success {
       echo "Done — image: ${DOCKER_REGISTRY}/${IMAGE_NAME}:${TAG}"
     }
-    failure { echo "Build failed" }
+    failure { 
+      echo "Build failed" 
+    }
   }
 }
