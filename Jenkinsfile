@@ -1,39 +1,23 @@
 pipeline {
-  agent any
+    agent any
 
-  environment {
-    NODE_ENV = 'test'
-  }
+    stages {
+        stage('Checkout Code') {
+            steps {
+                checkout scm
+            }
+        }
 
-  stages {
-    stage('Checkout') {
-      steps {
-        checkout scm
-      }
+        stage('Install Dependencies') {
+            steps {
+                sh 'npm install'   // change this if not Node.js
+            }
+        }
+
+        stage('Run App') {
+            steps {
+                sh 'npm start'     // or your command: python app.py, nodemon, etc.
+            }
+        }
     }
-
-    stage('Install') {
-      steps {
-        sh 'npm ci'
-      }
-    }
-
-    stage('Test') {
-      steps {
-        sh 'npm test'
-      }
-    }
-
-    stage('Build') {
-      when { branch 'main' }
-      steps {
-        sh 'npm run build'
-      }
-    }
-  }
-
-  post {
-    success { echo "Pipeline succeeded" }
-    failure { echo "Pipeline failed" }
-  }
 }
