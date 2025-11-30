@@ -2,8 +2,8 @@ pipeline {
     agent any
     
     tools {
-    nodejs "NodeJS"
-}
+        nodejs "NodeJS"
+    }
     
     environment {
         NODE_ENV = 'production'
@@ -25,39 +25,38 @@ pipeline {
         
         stage('Install Dependencies') {
             steps {
-                sh 'npm ci --legacy-peer-deps'
+                bat 'npm ci --legacy-peer-deps'
             }
         }
         
         stage('Run Tests') {
             steps {
-                sh 'npm test'
+                bat 'npm test'
             }
         }
         
         stage('Security Audit') {
             steps {
-                sh 'npm audit --audit-level moderate'
+                bat 'npm audit --audit-level moderate'
             }
         }
         
         stage('Stop Previous App') {
             steps {
-                sh '''
-                    echo "Stopping any existing YelpCamp process..."
-                    pkill -f "node.*app.js" || true
-                    sleep 5
+                bat '''
+                    echo Stopping any existing YelpCamp process...
+                    taskkill /f /im node.exe 2>nul || exit 0
+                    timeout /t 5 /nobreak
                 '''
             }
         }
         
         stage('Start Application') {
             steps {
-                sh """
-                    echo "Starting YelpCamp application..."
-                    nohup node app.js > yelpcamp.log 2>&1 &
-                    echo \$! > yelpcamp.pid
-                    echo "Application started with PID: \$(cat yelpcamp.pid)"
+                bat """
+                    echo Starting YelpCamp application...
+                    start /b node app.js > yelpcamp.log 2>&1
+                    echo Application started in background
                 """
             }
         }
@@ -66,16 +65,16 @@ pipeline {
             steps {
                 script {
                     sleep time: 15, unit: 'SECONDS'
-                    sh """
-                        echo "Performing health check..."
-                        if curl -f http://localhost:\${PORT}/ || curl -f http://localhost:\${PORT}/campgrounds; then
-                            echo "✅ YelpCamp is healthy and responding on port \${PORT}"
-                        else
-                            echo "❌ Health check failed"
-                            echo "=== Application Logs ==="
-                            cat yelpcamp.log || true
+                    bat """
+                        echo Performing health check...
+                        curl -f http://localhost:%PORT%/ || curl -f http://localhost:%PORT%/campgrounds
+                        if %errorlevel% equ 0 (
+                            echo ✅ YelpCamp is healthy and responding on port %PORT%
+                        ) else (
+                            echo ❌ Health check failed
+                            type yelpcamp.log
                             exit 1
-                        fi
+                        )
                     """
                 }
             }
@@ -84,15 +83,15 @@ pipeline {
     
     post {
         success {
-            echo "✅ YelpCamp deployed successfully! Running on port \${PORT}"
+            echo "✅ YelpCamp deployed successfully! Running on port ${PORT}"
         }
         failure {
             echo "❌ Deployment failed"
-            sh '''
-                echo "=== Application Logs ==="
-                cat yelpcamp.log || true
-                echo "=== Current Processes ==="
-                ps aux | grep node || true
+            bat '''
+                echo === Application Logs ===
+                type yelpcamp.log
+                echo === Current Processes ===
+                tasklist | findstr node
             '''
         }
         always {
