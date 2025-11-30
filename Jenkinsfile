@@ -55,11 +55,37 @@ pipeline {
         sh "docker push ${IMAGE}:${TAG}"
       }
     }
+
+    stage('Deploy Container') {
+      steps {
+        withCredentials([file(credentialsId: 'envfile', variable: 'ENVFILE')]) {
+          sh """
+            echo 'Loading environment variables...'
+            set -a
+            source $ENVFILE
+            set +a
+
+            echo 'Stopping old container...'
+            docker rm -f yelpcamp || true
+
+            echo 'Starting container...'
+            docker run -d --name yelpcamp -p 3300:3300 \
+              -e MAPBOX_TOKEN="\$MAPBOX_TOKEN" \
+              -e DB_URL="\$DB_URL" \
+              -e CLOUDINARY_CLOUD_NAME="\$CLOUDINARY_CLOUD_NAME" \
+              -e CLOUDINARY_KEY="\$CLOUDINARY_KEY" \
+              -e CLOUDINARY_SECRET="\$CLOUDINARY_SECRET" \
+              -e SESSION_SECRET="\$SESSION_SECRET" \
+              ${IMAGE}:${TAG}
+          """
+        }
+      }
+    }
   }
 
   post {
     success {
-      echo "Build SUCCEEDED"
+      echo "Build & Deploy SUCCEEDED"
     }
     failure {
       echo "Build FAILED"
