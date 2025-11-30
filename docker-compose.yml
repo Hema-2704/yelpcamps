@@ -1,0 +1,17 @@
+version: "3.8"
+services:
+  yelpcamp:
+    image: 40448283/yelpcamp:latest
+    ports:
+      - "3300:3300"
+    environment:
+      - NODE_ENV=production
+      - MONGO_URL=${MONGO_URL}
+    depends_on:
+      - mongo
+  mongo:
+    image: mongo:6
+    volumes:
+      - mongo-data:/data/db
+volumes:
+  mongo-data:
