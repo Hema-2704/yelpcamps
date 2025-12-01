@@ -1,95 +1,113 @@
-// Jenkinsfile (Docker agent) using your env variables and credential IDs
 pipeline {
-  agent {
-    docker {
-      image 'node:16'
-      args  '-u root:root'   // ensure the agent can run docker commands (or run on an agent that has docker)
-    }
-  }
+  agent any
 
   environment {
-    DOCKER_REGISTRY = '40448283'           // Your Docker Hub username
-    IMAGE_NAME = 'yelpcamp'                // image repo name
-    TAG = "${env.BUILD_ID}"
-    DOCKER_CREDENTIALS_ID = 'docker-hub-credentials' // Jenkins credential id for Docker Hub (username+password/token)
-    GIT_CREDENTIALS_ID = 'gits'            // Jenkins credential id for Git (if repo is private)
-  }
-
-  options {
-    timestamps()
-    buildDiscarder(logRotator(numToKeepStr: '30'))
+    NODE_ENV = 'production'
+    GIT_CREDENTIALS_ID = 'gits'        // optional: if your git repo is private
+    DEPLOY_SSH_CREDENTIALS = 'deploy-ssh' // optional: Jenkins SSH credential id for deployment
+    DEPLOY_USER = 'deployuser'         // override in job if needed
+    DEPLOY_HOST = 'your.server.example'// override in job if needed
+    DEPLOY_PATH = '/opt/yelpcamp'      // where to place the build on target host
   }
 
   stages {
     stage('Checkout') {
       steps {
-        // If your repo is private, configure credentials in the job or use a multibranch pipeline
+        // if your repo is private and you configured credentials for the job,
+        // "checkout scm" will use the job's configured credentials.
         checkout scm
+      }
+    }
+
+    stage('Prepare') {
+      steps {
+        // show versions for debugging agent setup
+        sh 'node --version || true'
+        sh 'npm --version || true'
       }
     }
 
     stage('Install') {
       steps {
-        sh 'npm ci'
-      }
-    }
-
-    stage('Test') {
-      steps {
-        // run tests if test script exists, but don't fail the pipeline just because tests are not present
+        // Use npm ci for reproducible installs if package-lock.json exists
         sh '''
-          if npm run | grep -q test; then
-            npm test || true
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
           fi
         '''
       }
     }
 
-    stage('Build Docker image') {
-      when { expression { fileExists('Dockerfile') } }
+    stage('Test') {
       steps {
-        script {
-          env.FULL_IMAGE = "${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.TAG}"
-          sh "docker build -t ${env.FULL_IMAGE} ."
+        // run tests only if npm has a test script
+        sh '''
+          if npm run | grep -q " test"; then
+            npm test || true
+          else
+            echo "No test script defined — skipping tests"
+          fi
+        '''
+      }
+      post {
+        always {
+          // collect junit if tests produce it; adjust path if needed
+          junit allowEmptyResults: true, testResults: 'reports/**/*.xml'
         }
       }
     }
 
-    stage('Push Docker image') {
-      when { expression { fileExists('Dockerfile') } }
+    stage('Build') {
       steps {
-        withCredentials([usernamePassword(credentialsId: env.DOCKER_CREDENTIALS_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-          script {
-            // login, push, logout
-            sh """
-              echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-              docker push ${env.FULL_IMAGE}
-              docker logout || true
-            """
-          }
-        }
+        // build only if script exists
+        sh '''
+          if npm run | grep -q " build"; then
+            npm run build
+          else
+            echo "No build script - packaging current workspace"
+            mkdir -p build
+            cp -r * build || true
+          fi
+        '''
+        // create a single artifact to archive
+        sh '''
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          if [ -d build ]; then
+            tar -czf release-$TIMESTAMP.tar.gz build
+          else
+            tar -czf release-$TIMESTAMP.tar.gz .
+          fi
+        '''
+        archiveArtifacts artifacts: 'release-*.tar.gz', fingerprint: true
       }
     }
 
-    stage('Cleanup local image') {
-      when { expression { fileExists('Dockerfile') } }
+    stage('Deploy (optional)') {
+      when {
+        expression { return env.DEPLOY_HOST != null && env.DEPLOY_HOST != '' }
+      }
       steps {
-        // remove local image to free agent disk space (non-fatal)
-        sh "docker rmi ${env.FULL_IMAGE} || true"
+        // requires Jenkins credential of type "SSH Username with private key" with id DEPLOY_SSH_CREDENTIALS
+        sshagent (credentials: [env.DEPLOY_SSH_CREDENTIALS]) {
+          sh '''
+            LATEST=$(ls -1t release-*.tar.gz | head -n1)
+            echo "Deploying $LATEST to ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}"
+            scp -o StrictHostKeyChecking=no $LATEST ${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/
+            ssh -o StrictHostKeyChecking=no ${DEPLOY_USER}@${DEPLOY_HOST} "mkdir -p ${DEPLOY_PATH} && tar -xzf /tmp/$LATEST -C ${DEPLOY_PATH} && systemctl restart yelpcamp || true"
+          '''
+        }
       }
     }
   }
 
   post {
     success {
-      echo "Done — image: ${env.DOCKER_REGISTRY}/${env.IMAGE_NAME}:${env.TAG}"
+      echo "Pipeline succeeded. Artifact archived."
     }
     failure {
-      echo "Build failed"
-    }
-    always {
-      // Best-effort cleanup
-      sh "docker logout || true"
+      echo "Pipeline failed. See console output."
     }
   }
 }
