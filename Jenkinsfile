@@ -8,12 +8,15 @@ pipeline {
       }
     }
     
-    stage('Install & Build') {
+    stage('Install') {
       steps {
-        bat '''
-          npm install
-          npm run build --if-present
-        '''
+        bat 'npm install'
+      }
+    }
+    
+    stage('Start') {
+      steps {
+        bat 'npm start'
       }
     }
   }
