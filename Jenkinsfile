@@ -14,26 +14,22 @@ pipeline {
       }
     }
     
-    stage('Start, Test, and Stop') {
+    stage('Start on Port 3300') {
       steps {
         script {
-          try {
-            // Start server
-            bat 'start /B npm start'
-            
-            // Wait for server to start
-            sleep 15
-            
-            // Run a quick test
-            bat 'curl -f http://localhost:3000 && echo "Server is responding" || echo "Server not responding"'
-            
-            // Let it run a bit
-            sleep 30
-            
-          } finally {
-            // Always stop the server
-            bat 'taskkill /F /IM node.exe 2>nul'
-          }
+          // Start server
+          bat 'start /B npm start'
+          
+          // Wait and test
+          sleep 40
+          
+          bat '''
+            echo "Testing server on port 3300..."
+            curl http://localhost:3300 || echo "Server might need more time to start"
+          '''
+          
+          // Keep it running for testing
+          sleep 60
         }
       }
     }
@@ -41,7 +37,9 @@ pipeline {
   
   post {
     always {
-      echo 'Pipeline execution completed.'
+      echo 'Stopping server...'
+      bat 'taskkill /F /IM node.exe 2>nul'
+      echo 'Done!'
     }
   }
 }
